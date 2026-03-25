@@ -27,9 +27,13 @@ export async function GET(request: NextRequest) {
     from: details.from,
     to: details.to,
     days: details.days,
+    start: details.start,
     stations: details.stns.map((s) => ({
       code: s.code,
       name: s.name,
+      day: s.day,
+      dep: s.dep,
+      arr: s.arr,
     })),
   });
 }

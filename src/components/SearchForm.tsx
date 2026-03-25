@@ -17,6 +17,8 @@ export default function SearchForm() {
     dataMode, setDataMode,
     trainStations, setTrainStations,
     selectedTrainName, setSelectedTrainName,
+    scheduleStatus, setScheduleStatus,
+    scheduleMessage, setScheduleMessage,
   } = useStore();
   const router = useRouter();
 
@@ -29,13 +31,6 @@ export default function SearchForm() {
   const suggestionsRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-
-  // Set today's date on mount (client-only to avoid hydration mismatch)
-  useEffect(() => {
-    if (!date) {
-      setDate(new Date().toISOString().split("T")[0]);
-    }
-  }, [date, setDate]);
 
   // Close suggestions on outside click
   useEffect(() => {
@@ -77,11 +72,45 @@ export default function SearchForm() {
       setTrainStations([]);
       setFrom("");
       setTo("");
+      setDate("");
+      setScheduleStatus("idle");
+      setScheduleMessage("");
     }
 
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => searchTrains(value), 300);
   };
+
+  // Fetch schedule (auto-date) for the selected train
+  const fetchSchedule = useCallback(async (trainNumber: string) => {
+    setScheduleStatus("loading");
+    setScheduleMessage("Checking schedule & chart status...");
+    setDate("");
+
+    try {
+      const res = await fetch(`/api/train-schedule?train_no=${trainNumber}`);
+      const data = await res.json();
+
+      if (data.status === "ready") {
+        setDate(data.date);
+        setScheduleStatus("ready");
+        setScheduleMessage(data.message || `Chart ready for ${data.date}`);
+      } else if (data.status === "not_ready") {
+        setDate(data.date);
+        setScheduleStatus("not_ready");
+        setScheduleMessage(data.message || `Chart not yet prepared for ${data.date}`);
+      } else if (data.status === "unavailable") {
+        setScheduleStatus("unavailable");
+        setScheduleMessage(data.message || "Train doesn't run in the next 7 days.");
+      } else {
+        setScheduleStatus("error");
+        setScheduleMessage(data.message || "Could not determine schedule.");
+      }
+    } catch {
+      setScheduleStatus("error");
+      setScheduleMessage("Failed to check train schedule.");
+    }
+  }, [setDate, setScheduleStatus, setScheduleMessage]);
 
   // Select a train from suggestions
   const handleSelectTrain = async (train: TrainSuggestion) => {
@@ -106,6 +135,9 @@ export default function SearchForm() {
     } finally {
       setLoadingStations(false);
     }
+
+    // Auto-detect date via schedule API
+    fetchSchedule(train.number);
   };
 
   const handleSearch = async (e: React.FormEvent) => {
@@ -118,6 +150,9 @@ export default function SearchForm() {
 
   const fromIdx = from ? trainStations.findIndex((s) => s.code === from) : -1;
   const filteredTo = fromIdx >= 0 ? trainStations.filter((_, i) => i > fromIdx) : trainStations.slice(1);
+
+  // Determine if the form is submittable
+  const canSubmit = trainNo && date && from && to && (scheduleStatus === "ready" || scheduleStatus === "not_ready" || dataMode === "mock");
 
   return (
     <motion.form
@@ -237,21 +272,95 @@ export default function SearchForm() {
             )}
           </div>
 
-          {/* Date */}
-          <div className="space-y-2">
+          {/* Schedule / Date Status — replaces old date picker */}
+          <div className="space-y-2 md:col-span-2">
             <label className="text-sm font-medium text-gray-300 uppercase tracking-wider">
               Journey Date
             </label>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500/50 transition-all [color-scheme:dark]"
-            />
-          </div>
+            <AnimatePresence mode="wait">
+              {scheduleStatus === "idle" && !trainNo && (
+                <motion.div
+                  key="idle"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="bg-white/[0.03] border border-white/10 rounded-xl px-4 py-3 text-gray-500 text-sm"
+                >
+                  Select a train to auto-detect the journey date
+                </motion.div>
+              )}
 
-          {/* Spacer for grid alignment */}
-          <div className="hidden md:block" />
+              {scheduleStatus === "loading" && (
+                <motion.div
+                  key="loading"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="bg-white/[0.03] border border-white/10 rounded-xl px-4 py-3 flex items-center gap-3"
+                >
+                  <div className="w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+                  <span className="text-cyan-400 text-sm">Checking schedule & chart status...</span>
+                </motion.div>
+              )}
+
+              {scheduleStatus === "ready" && (
+                <motion.div
+                  key="ready"
+                  initial={{ opacity: 0, y: -5 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-3"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="text-emerald-400 font-semibold text-sm">
+                      📅 {date}
+                    </span>
+                    <span className="text-emerald-400/60 text-xs ml-auto">Chart Ready ✓</span>
+                  </div>
+                  <p className="text-emerald-400/70 text-xs mt-1">{scheduleMessage}</p>
+                </motion.div>
+              )}
+
+              {scheduleStatus === "not_ready" && (
+                <motion.div
+                  key="not_ready"
+                  initial={{ opacity: 0, y: -5 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-amber-400 font-semibold text-sm">
+                      📅 {date}
+                    </span>
+                    <span className="text-amber-400/60 text-xs ml-auto">Chart Not Prepared</span>
+                  </div>
+                  <p className="text-amber-400/70 text-xs mt-1">{scheduleMessage}</p>
+                  {dataMode === "mock" && (
+                    <p className="text-gray-500 text-xs mt-1">💡 You can still search in Mock mode</p>
+                  )}
+                </motion.div>
+              )}
+
+              {(scheduleStatus === "unavailable" || scheduleStatus === "error") && (
+                <motion.div
+                  key="unavailable"
+                  initial={{ opacity: 0, y: -5 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  className="bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-red-400 font-semibold text-sm">
+                      ❌ {scheduleStatus === "unavailable" ? "Train doesn't run now" : "Schedule check failed"}
+                    </span>
+                  </div>
+                  <p className="text-red-400/70 text-xs mt-1">{scheduleMessage}</p>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
 
           {/* From Station */}
           <div className="space-y-2">
@@ -302,7 +411,7 @@ export default function SearchForm() {
         {/* Submit */}
         <motion.button
           type="submit"
-          disabled={!trainNo || !date || !from || !to}
+          disabled={!canSubmit}
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}
           className="w-full py-4 bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-semibold rounded-xl shadow-lg shadow-cyan-500/25 hover:shadow-cyan-500/40 transition-all disabled:opacity-40 disabled:cursor-not-allowed text-lg tracking-wide"

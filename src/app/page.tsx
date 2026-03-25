@@ -3,8 +3,23 @@
 import SearchForm from "@/components/SearchForm";
 import DarkModeToggle from "@/components/DarkModeToggle";
 import { motion } from "framer-motion";
+import { useState, useEffect } from "react";
 
 export default function Home() {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) {
+    return (
+      <div className="min-h-screen bg-gradient-animate flex items-center justify-center">
+        <div className="w-12 h-12 border-4 border-cyan-500/30 border-t-cyan-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-animate relative">
       {/* Ambient glow effects */}

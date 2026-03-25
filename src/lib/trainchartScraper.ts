@@ -162,8 +162,18 @@ export async function searchTrains(
     });
     if (!res.ok) return [];
 
-    const data: TrainSearchEntry[] = await res.json();
-    return data.map((entry) => {
+    const data = await res.json();
+
+    // When query is a full train number, API returns a single train details
+    // object (with `number`, `name` fields) instead of a search result array.
+    if (!Array.isArray(data)) {
+      if (data && data.number && data.name) {
+        return [{ number: String(data.number), name: String(data.name) }];
+      }
+      return [];
+    }
+
+    return (data as TrainSearchEntry[]).map((entry) => {
       const parts = entry.t.split(" - ");
       return {
         number: parts[0]?.trim() || "",
@@ -265,9 +275,10 @@ export async function scrapeTrainchart(
     // Step 3: Fetch vacancy for each coach
     const seatData: TrainSeatData = {};
     let successCount = 0;
+    const failedCoaches: typeof reservableCoaches = [];
 
-    // Fetch coaches in parallel batches of 5
-    const batchSize = 5;
+    // Fetch coaches in parallel batches of 3 (smaller to avoid rate limits)
+    const batchSize = 3;
     for (let i = 0; i < reservableCoaches.length; i += batchSize) {
       const batch = reservableCoaches.slice(i, i + batchSize);
 
@@ -285,11 +296,17 @@ export async function scrapeTrainchart(
       );
 
       for (const result of results) {
-        if (result.status !== "fulfilled" || !result.value) continue;
+        if (result.status !== "fulfilled" || !result.value) {
+          // Track coach that failed for retry
+          const idx = results.indexOf(result);
+          if (batch[idx]) failedCoaches.push(batch[idx]);
+          continue;
+        }
         const { coach, data } = result.value;
 
         if (!data || data.error || !data.bdd || data.bdd.length === 0) {
           console.log(`[TrainChart] No data for ${coach.classCode}:${coach.id}: ${data?.error || "empty"}`);
+          failedCoaches.push(coach);
           continue;
         }
 
@@ -306,9 +323,33 @@ export async function scrapeTrainchart(
         }
       }
 
-      // Small delay between batches
+      // Longer delay between batches to avoid rate limiting
       if (i + batchSize < reservableCoaches.length) {
-        await delay(200);
+        await delay(500);
+      }
+    }
+
+    // Retry failed coaches individually with longer delays
+    if (failedCoaches.length > 0 && successCount > 0) {
+      console.log(`[TrainChart] Retrying ${failedCoaches.length} failed coaches...`);
+      for (const coach of failedCoaches) {
+        try {
+          await delay(300);
+          const vacancyUrl = `${API_BASE}/chart/${trainNo}/${date}/${coach.classCode}:${coach.id}`;
+          const res = await fetch(vacancyUrl, { headers: HEADERS });
+          if (!res.ok) continue;
+
+          const data: CoachVacancyResponse = await res.json();
+          if (!data || data.error || !data.bdd || data.bdd.length === 0) continue;
+
+          const coachData = parseCoachBerthData(data.bdd, stations);
+          if (Object.keys(coachData).length > 0) {
+            seatData[coach.id] = coachData;
+            successCount++;
+          }
+        } catch {
+          // Skip silently on retry
+        }
       }
     }
 
@@ -320,7 +361,7 @@ export async function scrapeTrainchart(
         trainName: trainName || trainNo,
         coaches: reservableCoaches,
         chartPrepTime: compData.cpts,
-        error: "Could not fetch seat vacancy data for any coach. The chart may not be fully available yet.",
+        error: `Could not fetch seat vacancy data for any coach (0/${reservableCoaches.length} coaches responded). The chart may not be fully available yet — try again in a few minutes.`,
       };
     }
 

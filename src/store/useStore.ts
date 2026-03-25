@@ -25,6 +25,8 @@ interface TrainStationInfo {
   name: string;
 }
 
+type ScheduleStatus = 'idle' | 'loading' | 'ready' | 'not_ready' | 'unavailable' | 'error';
+
 interface AppState {
   // Search
   trainNo: string;
@@ -45,6 +47,12 @@ interface AppState {
   setTrainStations: (v: TrainStationInfo[]) => void;
   selectedTrainName: string;
   setSelectedTrainName: (v: string) => void;
+
+  // Schedule & chart status
+  scheduleStatus: ScheduleStatus;
+  setScheduleStatus: (v: ScheduleStatus) => void;
+  scheduleMessage: string;
+  setScheduleMessage: (v: string) => void;
 
   // Results
   loading: boolean;
@@ -96,6 +104,11 @@ export const useStore = create<AppState>((set, get) => ({
   setTrainStations: (v) => set({ trainStations: v }),
   selectedTrainName: "",
   setSelectedTrainName: (v) => set({ selectedTrainName: v }),
+
+  scheduleStatus: 'idle',
+  setScheduleStatus: (v) => set({ scheduleStatus: v }),
+  scheduleMessage: '',
+  setScheduleMessage: (v) => set({ scheduleMessage: v }),
 
   loading: false,
   error: null,
