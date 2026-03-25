@@ -1,15 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTrainDetails } from "@/lib/trainchartScraper";
-import { getISTDate } from "@/lib/dateUtils";
 
 export const dynamic = "force-dynamic";
-
-console.log("DATES BEING TESTED:");
-
-for (let i = 0; i < 5; i++) {
-  const d = getISTDate(i);
-  console.log(i, d);
-}
 
 const API_BASE = "https://api2.trainapp.in/api";
 const HEADERS: Record<string, string> = {
@@ -34,7 +26,7 @@ interface AvailableDate {
 
 /**
  * Simple schedule checker:
- * 1. Check chart API for today and the next 4 days
+ * 1. Check chart API for yesterday,today and the next 3 days
  * 2. Return ALL dates that have charts prepared (c1 > 0)
  * 3. Auto-select the first available one
  * 4. No departure-time guessing — just trust the API
@@ -61,10 +53,16 @@ export async function GET(request: NextRequest) {
       ist: new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
     });
 
-    // Check chart status for today + next 4 days (5 total) using IST
+    // Check chart status for today + next 4 days (5 total)
+    const now = new Date(
+      new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+    );
+
     const datesToCheck: string[] = [];
     for (let offset = -1; offset < 4; offset++) {
-      datesToCheck.push(getISTDate(offset));
+      const d = new Date(now);
+      d.setDate(d.getDate() + offset);
+      datesToCheck.push(d.toISOString().split("T")[0]);
     }
 
     const availableDates: AvailableDate[] = [];
@@ -83,7 +81,7 @@ export async function GET(request: NextRequest) {
           const data: ChartCheckResponse = await res.json();
           return {
             date,
-            ready: !!(data.c1 && data.c1 > 0),
+            ready: !!(data.c1 && data.c1 > 0) || !!data.cpts,
             chartPrepTime: data.cpts || data.cpt,
           };
         } catch {
@@ -91,6 +89,8 @@ export async function GET(request: NextRequest) {
         }
       })
     );
+
+
 
     for (const result of results) {
       if (result.status !== "fulfilled") continue;

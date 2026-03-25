@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { getISTTimestamp } from "@/lib/dateUtils";
 import type {
   TrainSeatData,
   SeatPlan,
@@ -176,7 +175,7 @@ export const useStore = create<AppState>((set, get) => ({
         coachStats: data.coachStats,
         segmentIndices: data.segmentIndices,
         dataSource: data.source || dataMode,
-        fetchedAt: data.fetchedAt || getISTTimestamp(),
+        fetchedAt: data.fetchedAt || new Date().toISOString(),
         chartPrepTime: data.chartPrepTime || null,
         stations: data.stations || [],
         trainName: data.trainName || trainNo,

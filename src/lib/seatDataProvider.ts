@@ -1,7 +1,6 @@
 import { scrapeTrainchart } from "./trainchartScraper";
 import { generateMockData, getDefaultStations } from "./mockDataGenerator";
 import type { TrainSeatData, DataSourceMode } from "./constants";
-import { getISTTimestamp } from "./dateUtils";
 
 export interface SeatDataResult {
   seatData: TrainSeatData;
@@ -39,7 +38,7 @@ export class MockSeatDataProvider implements SeatDataProvider {
       stations,
       trainName,
       source: "mock",
-      fetchedAt: getISTTimestamp(),
+      fetchedAt: new Date().toISOString(),
       coaches: coaches.map((c) => ({ id: c.id, classCode: c.type, type: c.type })),
     };
   }
@@ -62,7 +61,7 @@ export class TrainchartSeatDataProvider implements SeatDataProvider {
       stations: result.stations,
       trainName: result.trainName,
       source: "live",
-      fetchedAt: getISTTimestamp(),
+      fetchedAt: new Date().toISOString(),
       chartPrepTime: result.chartPrepTime,
       coaches: result.coaches.map((c) => ({
         id: c.id,

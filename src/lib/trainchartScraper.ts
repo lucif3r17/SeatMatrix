@@ -1,11 +1,12 @@
 /**
- * TrainChart.in API Scraper (v2)
+ * TrainChart.in API Scraper (v3)
  *
- * Uses the public API at api2.trainapp.in:
+ * Uses the public API at api2.trainapp.in with IRCTC fallback:
  * 1. Train search:      GET /api/train/{partial}      → autocomplete
  * 2. Train details:     GET /api/train/{trainNo}       → stations, name, days
  * 3. Coach composition: GET /api/chart/{trainNo}/{date} → coach list + chart status
  * 4. Per-coach vacancy: GET /api/chart/{trainNo}/{date}/{class}:{coach} → bdd berth data
+ *    Fallback:          POST irctc.co.in/online-charts/api/coachComposition → bdd berth data
  *
  * No Playwright needed — pure HTTP fetch.
  */
@@ -13,6 +14,7 @@
 import type { TrainSeatData, CoachData, BerthType } from "./constants";
 
 const API_BASE = "https://api2.trainapp.in/api";
+const IRCTC_API_BASE = "https://www.irctc.co.in/online-charts/api";
 
 const HEADERS: Record<string, string> = {
   "User-Agent":
@@ -58,7 +60,9 @@ interface ChartCompositionResponse {
   /** Coach position array, e.g. ["3A:B1", "2A:A1", "SL:S1", ...] */
   cp: string[];
   /** Chart status: 0 = not prepared, 1+ = prepared */
-  c1: number;
+  c1?: number;
+  /** Source: "TC" = cached from IRCTC, absent = not cached */
+  src?: string;
   /** Chart preparation time string */
   cpt?: string;
   /** Human-readable chart prep time */
@@ -100,6 +104,23 @@ interface CoachVacancyResponse {
   bdd?: BerthDatum[];
   coachName?: string;
   error?: string | null;
+}
+
+/** IRCTC trainComposition response */
+interface IRCTCTrainCompositionResponse {
+  cdd?: {
+    coachName: string;
+    classCode: string;
+    positionFromEngine: number;
+    vacantBerths: number;
+  }[];
+  chartStatusResponseDto?: {
+    chartOneFlag: number;
+    chartTwoFlag: number;
+  };
+  chartOneDate?: string;
+  trainStartDate?: string;
+  error?: string;
 }
 
 // ─── Result types ───
@@ -204,10 +225,147 @@ export async function getTrainDetails(
   }
 }
 
+// ─── IRCTC Fallback helpers ───
+
+/**
+ * Fetch per-coach berth data from IRCTC's online-charts API.
+ * This is the same data source trainchart.in uses as its fallback.
+ */
+async function fetchCoachFromIRCTC(
+  trainNo: string,
+  date: string,
+  coachName: string,
+  classCode: string,
+  boardingStation: string,
+  trainSourceStation: string
+): Promise<CoachVacancyResponse> {
+  try {
+    const res = await fetch(`${IRCTC_API_BASE}/coachComposition`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/plain, */*",
+        "User-Agent": HEADERS["User-Agent"],
+      },
+      body: JSON.stringify({
+        trainNo,
+        jDate: date,
+        coach: coachName,
+        cls: classCode,
+        boardingStation,
+        remoteStation: boardingStation,
+        trainSourceStation,
+      }),
+      cache: "no-store",
+    });
+    if (!res.ok) return { error: `IRCTC HTTP ${res.status}` };
+    const data = await res.json();
+    return data;
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "IRCTC fetch failed" };
+  }
+}
+
+/**
+ * Fetch chart composition from IRCTC when TrainApp doesn't have src=TC.
+ */
+async function fetchChartFromIRCTC(
+  trainNo: string,
+  date: string,
+  boardingStation: string
+): Promise<ChartCompositionResponse | null> {
+  try {
+    const res = await fetch(`${IRCTC_API_BASE}/trainComposition`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/plain, */*",
+        "User-Agent": HEADERS["User-Agent"],
+      },
+      body: JSON.stringify({ trainNo, jDate: date, boardingStation }),
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const data: IRCTCTrainCompositionResponse = await res.json();
+    if (data.error || !data.cdd || data.cdd.length === 0) return null;
+
+    // Convert IRCTC format to TrainApp format
+    const c1Flag = data.chartStatusResponseDto?.chartOneFlag ?? 0;
+    const cp = data.cdd
+      .sort((a, b) => a.positionFromEngine - b.positionFromEngine || a.classCode.localeCompare(b.classCode))
+      .map((c) => `${c.classCode}:${c.coachName}`);
+    const cpts = data.chartOneDate
+      ? (data.chartOneDate.slice(0, 10) === data.trainStartDate ? "same day at" : "prev day at") +
+        data.chartOneDate.slice(10)
+      : undefined;
+
+    return {
+      cp,
+      c1: c1Flag > 0 ? c1Flag : 0,
+      src: "TC",
+      cpt: data.chartOneDate,
+      cpts,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch a single coach's vacancy, trying TrainApp first, then IRCTC fallback.
+ */
+async function fetchCoachVacancy(
+  trainNo: string,
+  date: string,
+  coach: { id: string; classCode: string },
+  boardingStation: string,
+  trainSourceStation: string
+): Promise<{ coach: { id: string; classCode: string }; data: CoachVacancyResponse } | null> {
+  // Try 1: TrainApp API
+  try {
+    const vacancyUrl = `${API_BASE}/chart/${trainNo}/${date}/${coach.classCode}:${coach.id}`;
+    const res = await fetch(vacancyUrl, { headers: HEADERS, cache: "no-store" });
+    if (res.ok) {
+      const data: CoachVacancyResponse = await res.json();
+      if (data?.bdd && data.bdd.length > 0 && !data.error) {
+        console.log(`[TrainChart] Got data from TrainApp for ${coach.classCode}:${coach.id}`);
+        return { coach, data };
+      }
+    }
+  } catch {
+    // Fall through to IRCTC
+  }
+
+  // Try 2: IRCTC fallback
+  try {
+    console.log(`[TrainChart] TrainApp empty, trying IRCTC for ${coach.classCode}:${coach.id}`);
+    const irctcData = await fetchCoachFromIRCTC(
+      trainNo, date, coach.id, coach.classCode, boardingStation, trainSourceStation
+    );
+    if (irctcData?.bdd && irctcData.bdd.length > 0 && !irctcData.error) {
+      console.log(`[TrainChart] Got data from IRCTC for ${coach.classCode}:${coach.id}`);
+      // Save back to TrainApp cache (fire and forget)
+      try {
+        fetch(`${API_BASE}/chart/${trainNo}/${date}/${coach.classCode}:${coach.id}`, {
+          method: "POST",
+          headers: { ...HEADERS, "Content-Type": "application/json" },
+          body: JSON.stringify(irctcData),
+          cache: "no-store",
+        }).catch(() => {});
+      } catch {}
+      return { coach, data: irctcData };
+    }
+  } catch {
+    // Both failed
+  }
+
+  return null;
+}
+
 // ─── Main chart scraper ───
 
 /**
- * Scrape train chart vacancy data from trainchart.in API.
+ * Scrape train chart vacancy data from trainchart.in API with IRCTC fallback.
  *
  * @param trainNo Train number (e.g. "11046")
  * @param date    Date in YYYY-MM-DD format
@@ -219,10 +377,12 @@ export async function scrapeTrainchart(
   stationList?: string[]
 ): Promise<TrainchartResult> {
   try {
-    // Step 1: Fetch coach composition
+    // Step 1: Fetch coach composition from TrainApp
     console.log(`[TrainChart] Fetching coach list for ${trainNo} on ${date}`);
     const compUrl = `${API_BASE}/chart/${trainNo}/${date}`;
     const compRes = await fetch(compUrl, { headers: HEADERS, cache: "no-store" });
+
+    let compData: ChartCompositionResponse;
 
     if (!compRes.ok) {
       if (compRes.status === 404) {
@@ -231,34 +391,9 @@ export async function scrapeTrainchart(
       return fail(`API error: HTTP ${compRes.status}`);
     }
 
-    const compData: ChartCompositionResponse = await compRes.json();
+    compData = await compRes.json();
 
-    // Validate coach composition
-    if (!compData.cp || compData.cp.length === 0) {
-      return fail("No coach composition data available.");
-    }
-
-    // ⚠️ DO NOT EXIT if chart not ready
-    const isChartReady = compData.c1 && compData.c1 > 0;
-
-    // Optional: log for debugging
-    console.log(`[TrainChart] Chart status for ${trainNo}:`, {
-      c1: compData.c1,
-      ready: isChartReady,
-      time: compData.cpts,
-    });
-
-    // Parse coaches from composition
-    const coaches = compData.cp.map((entry) => {
-      const [classCode, coachId] = entry.split(":");
-      return { id: coachId, classCode };
-    });
-    // Filter out known non-reservable coaches (luggage, guard, pantry, etc.)
-    // Everything else gets tried — the API will just return "No seat data" for invalid ones
-    const NON_RESERVABLE = new Set(["GEN", "SLR", "EOG", "RMS", "PC", "LSLRD"]);
-    const reservableCoaches = coaches.filter((c) => !NON_RESERVABLE.has(c.classCode.toUpperCase()));
-
-    // Step 2: Get station list from train details if not provided
+    // Step 1b: Get station list from train details (need it for boarding station)
     let stations: string[] = stationList || [];
     let trainName = "";
 
@@ -270,88 +405,103 @@ export async function scrapeTrainchart(
       }
     }
 
+    // If TrainApp doesn't have full chart data (no src=TC), try IRCTC
+    if ((!compData.cp || compData.cp.length === 0 || !compData.c1) && stations.length > 0) {
+      console.log(`[TrainChart] TrainApp chart incomplete (c1=${compData.c1}, src=${compData.src}), trying IRCTC...`);
+      const irctcChart = await fetchChartFromIRCTC(trainNo, date, stations[0]);
+      if (irctcChart && irctcChart.cp && irctcChart.cp.length > 0) {
+        console.log(`[TrainChart] Got chart from IRCTC: ${irctcChart.cp.length} coaches, c1=${irctcChart.c1}`);
+        // Merge: prefer IRCTC data but keep TrainApp cpts if available
+        compData = {
+          ...compData,
+          cp: irctcChart.cp,
+          c1: irctcChart.c1 ?? compData.c1,
+          src: "TC",
+          cpt: irctcChart.cpt ?? compData.cpt,
+          cpts: irctcChart.cpts ?? compData.cpts,
+        };
+        // Save back to TrainApp (fire and forget)
+        try {
+          fetch(`${API_BASE}/chart/${trainNo}/${date}`, {
+            method: "POST",
+            headers: { ...HEADERS, "Content-Type": "application/json" },
+            body: JSON.stringify(compData),
+            cache: "no-store",
+          }).catch(() => {});
+        } catch {}
+      }
+    }
+
+    // Validate coach composition
+    if (!compData.cp || compData.cp.length === 0) {
+      return fail("No coach composition data available.");
+    }
+
+    const isChartReady = (compData.c1 && compData.c1 > 0) || !!compData.cpts;
+
+    console.log(`[TrainChart] Chart status for ${trainNo}:`, {
+      c1: compData.c1,
+      src: compData.src,
+      ready: isChartReady,
+      time: compData.cpts,
+    });
+
+    // Parse coaches from composition
+    const coaches = compData.cp.map((entry) => {
+      const [classCode, coachId] = entry.split(":");
+      return { id: coachId, classCode };
+    });
+    // Filter out known non-reservable coaches (luggage, guard, pantry, etc.)
+    const NON_RESERVABLE = new Set(["GEN", "SLR", "EOG", "RMS", "PC", "LSLRD"]);
+    const reservableCoaches = coaches.filter((c) => !NON_RESERVABLE.has(c.classCode.toUpperCase()));
+
     if (stations.length < 2) {
       return fail("Could not retrieve station list for this train.");
     }
 
-    // Step 3: Fetch vacancy for each coach
+    // Determine boarding and source stations for IRCTC fallback
+    const boardingStation = stations[0];
+    const trainSourceStation = stations[0];
+
+    // Step 3: Fetch vacancy for each coach (TrainApp → IRCTC fallback)
     const seatData: TrainSeatData = {};
     let successCount = 0;
-    const failedCoaches: typeof reservableCoaches = [];
 
-    // Fetch coaches in parallel batches of 3 (smaller to avoid rate limits)
+    // Fetch coaches in parallel batches of 3
     const batchSize = 3;
     for (let i = 0; i < reservableCoaches.length; i += batchSize) {
       const batch = reservableCoaches.slice(i, i + batchSize);
 
       const results = await Promise.allSettled(
-        batch.map(async (coach) => {
-          const vacancyUrl = `${API_BASE}/chart/${trainNo}/${date}/${coach.classCode}:${coach.id}`;
-          console.log(`[TrainChart] Fetching vacancy: ${coach.classCode}:${coach.id}`);
-
-          const res = await fetch(vacancyUrl, { headers: HEADERS, cache: "no-store" });
-          if (!res.ok) return null;
-
-          const data: CoachVacancyResponse = await res.json();
-          return { coach, data };
-        })
+        batch.map((coach) =>
+          fetchCoachVacancy(trainNo, date, coach, boardingStation, trainSourceStation)
+        )
       );
 
       for (const result of results) {
         if (result.status !== "fulfilled" || !result.value) {
-          // Track coach that failed for retry
-          const idx = results.indexOf(result);
-          if (batch[idx]) failedCoaches.push(batch[idx]);
           continue;
         }
         const { coach, data } = result.value;
 
         if (!data || data.error || !data.bdd || data.bdd.length === 0) {
-          console.log(`[TrainChart] No data for ${coach.classCode}:${coach.id}: ${data?.error || "empty"}`);
-          failedCoaches.push(coach);
           continue;
         }
 
-        // Extract train name from coach name if not set
         if (!trainName && data.coachName) {
-          trainName = trainNo; // fallback
+          trainName = trainNo;
         }
 
-        // Parse berth data into segment-based seat data
         const coachData = parseCoachBerthData(data.bdd, stations);
-        if (Object.keys(coachData).length > 0) {
-          seatData[coach.id] = coachData;
-          successCount++;
-        }
+        console.log(`[TrainChart] Parsed ${coach.classCode}:${coach.id}: ${Object.keys(coachData).length} seats`);
+
+        seatData[coach.id] = coachData;
+        successCount++;
       }
 
-      // Longer delay between batches to avoid rate limiting
+      // Delay between batches to avoid rate limiting
       if (i + batchSize < reservableCoaches.length) {
-        await delay(500);
-      }
-    }
-
-    // Retry failed coaches individually with longer delays
-    if (failedCoaches.length > 0 && successCount > 0) {
-      console.log(`[TrainChart] Retrying ${failedCoaches.length} failed coaches...`);
-      for (const coach of failedCoaches) {
-        try {
-          await delay(300);
-          const vacancyUrl = `${API_BASE}/chart/${trainNo}/${date}/${coach.classCode}:${coach.id}`;
-          const res = await fetch(vacancyUrl, { headers: HEADERS, cache: "no-store" });
-          if (!res.ok) continue;
-
-          const data: CoachVacancyResponse = await res.json();
-          if (!data || data.error || !data.bdd || data.bdd.length === 0) continue;
-
-          const coachData = parseCoachBerthData(data.bdd, stations);
-          if (Object.keys(coachData).length > 0) {
-            seatData[coach.id] = coachData;
-            successCount++;
-          }
-        } catch {
-          // Skip silently on retry
-        }
+        await delay(300);
       }
     }
 
@@ -364,7 +514,7 @@ export async function scrapeTrainchart(
         coaches: reservableCoaches,
         chartPrepTime: compData.cpts,
         error: isChartReady
-          ? "No seat data found."
+          ? "Chart is prepared but seat data could not be fetched. Try again in a moment."
           : `Chart not fully prepared yet. ${compData.cpts || ""}`,
       };
     }
@@ -387,12 +537,6 @@ export async function scrapeTrainchart(
 
 /**
  * Parse the bdd (berth data) array into segment-based CoachData.
- *
- * Each berth has a `bsd` array of booking splits. Each split has a
- * `from`/`to` station pair and an `occupancy` boolean.
- *
- * We map these splits onto the train's station list to determine
- * which segments each berth is occupied on.
  */
 function parseCoachBerthData(berthData: BerthDatum[], stations: string[]): CoachData {
   const numSegments = stations.length - 1;
@@ -414,18 +558,27 @@ function parseCoachBerthData(berthData: BerthDatum[], stations: string[]): Coach
     if (berth.bsd && berth.bsd.length > 0) {
       for (const split of berth.bsd) {
         if (split.occupancy) {
-          // Mark the segments covered by this split as occupied (0)
-          const fromIdx = stationIndex.get(split.from.toUpperCase());
-          const toIdx = stationIndex.get(split.to.toUpperCase());
+          let fromCode = split.from.toUpperCase();
+          let toCode = split.to.toUpperCase();
+          
+          let fromIdx = stationIndex.get(fromCode);
+          let toIdx = stationIndex.get(toCode);
+
+          if (fromIdx === undefined || toIdx === undefined) {
+            if (berth.from && berth.to) {
+              fromCode = berth.from.toUpperCase();
+              toCode = berth.to.toUpperCase();
+              fromIdx = stationIndex.get(fromCode);
+              toIdx = stationIndex.get(toCode);
+            }
+          }
 
           if (fromIdx !== undefined && toIdx !== undefined && fromIdx < toIdx) {
             for (let seg = fromIdx; seg < toIdx && seg < numSegments; seg++) {
               segments[seg] = 0;
             }
           } else {
-            // Station not in main route — try to find bounding stations
-            // This handles intermediate stations not in the stop list
-            markOccupiedFuzzy(segments, split.from, split.to, stations, stationIndex, numSegments);
+            markOccupiedFuzzy(segments, fromCode, toCode, stations, stationIndex, numSegments);
           }
         }
       }
@@ -442,9 +595,7 @@ function parseCoachBerthData(berthData: BerthDatum[], stations: string[]): Coach
 
 /**
  * Fuzzy occupancy marking for when split station codes don't exactly
- * match the train's station list (e.g. intermediate halts not in stns).
- *
- * Falls back to marking between the berth's overall from/to.
+ * match the train's station list.
  */
 function markOccupiedFuzzy(
   segments: number[],
@@ -454,15 +605,12 @@ function markOccupiedFuzzy(
   stationIndex: Map<string, number>,
   numSegments: number
 ): void {
-  // Try to find the closest matching stations in the route
   const fromUpper = splitFrom.toUpperCase();
   const toUpper = splitTo.toUpperCase();
 
-  // Find the station at or just before the split from
   let fromIdx = stationIndex.get(fromUpper);
   let toIdx = stationIndex.get(toUpper);
 
-  // If exact match not found, try partial matching
   if (fromIdx === undefined) {
     for (let i = 0; i < stations.length; i++) {
       if (stations[i].toUpperCase().startsWith(fromUpper) || fromUpper.startsWith(stations[i].toUpperCase())) {
@@ -489,7 +637,6 @@ function markOccupiedFuzzy(
 }
 
 // ─── Helpers ───
-// Helps to fail the function
 
 function fail(error: string, chartPrepTime?: string): TrainchartResult {
   return {
