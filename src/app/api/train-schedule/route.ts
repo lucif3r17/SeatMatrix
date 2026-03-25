@@ -4,6 +4,13 @@ import { getISTDate } from "@/lib/dateUtils";
 
 export const dynamic = "force-dynamic";
 
+console.log("DATES BEING TESTED:");
+
+for (let i = 0; i < 5; i++) {
+  const d = getISTDate(i);
+  console.log(i, d);
+}
+
 const API_BASE = "https://api2.trainapp.in/api";
 const HEADERS: Record<string, string> = {
   "User-Agent":
