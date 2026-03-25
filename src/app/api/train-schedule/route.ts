@@ -63,7 +63,7 @@ export async function GET(request: NextRequest) {
 
     // Check chart status for today + next 4 days (5 total) using IST
     const datesToCheck: string[] = [];
-    for (let offset = 0; offset < 5; offset++) {
+    for (let offset = -1; offset < 4; offset++) {
       datesToCheck.push(getISTDate(offset));
     }
 
