@@ -233,24 +233,26 @@ export async function scrapeTrainchart(
 
     const compData: ChartCompositionResponse = await compRes.json();
 
+    // Validate coach composition
     if (!compData.cp || compData.cp.length === 0) {
       return fail("No coach composition data available.");
     }
 
-    // Check if chart is prepared (c1 > 0 means prepared; absent or 0 means not)
-    if (!compData.c1 || compData.c1 <= 0) {
-      return fail(
-        `Chart not prepared yet. ${compData.cpts || "Charts are usually prepared 4-6 hours before departure."}`,
-        compData.cpts
-      );
-    }
+    // ⚠️ DO NOT EXIT if chart not ready
+    const isChartReady = compData.c1 && compData.c1 > 0;
+
+    // Optional: log for debugging
+    console.log(`[TrainChart] Chart status for ${trainNo}:`, {
+      c1: compData.c1,
+      ready: isChartReady,
+      time: compData.cpts,
+    });
 
     // Parse coaches from composition
     const coaches = compData.cp.map((entry) => {
       const [classCode, coachId] = entry.split(":");
       return { id: coachId, classCode };
     });
-
     // Filter out known non-reservable coaches (luggage, guard, pantry, etc.)
     // Everything else gets tried — the API will just return "No seat data" for invalid ones
     const NON_RESERVABLE = new Set(["GEN", "SLR", "EOG", "RMS", "PC", "LSLRD"]);
@@ -361,7 +363,9 @@ export async function scrapeTrainchart(
         trainName: trainName || trainNo,
         coaches: reservableCoaches,
         chartPrepTime: compData.cpts,
-        error: `Could not fetch seat vacancy data for any coach (0/${reservableCoaches.length} coaches responded). The chart may not be fully available yet — try again in a few minutes.`,
+        error: isChartReady
+          ? "No seat data found."
+          : `Chart not fully prepared yet. ${compData.cpts || ""}`,
       };
     }
 
