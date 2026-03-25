@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTrainDetails } from "@/lib/trainchartScraper";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const trainNo = searchParams.get("train_no");

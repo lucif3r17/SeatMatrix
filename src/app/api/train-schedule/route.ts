@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTrainDetails } from "@/lib/trainchartScraper";
 
+export const dynamic = "force-dynamic";
+
 const API_BASE = "https://api2.trainapp.in/api";
 const HEADERS: Record<string, string> = {
   "User-Agent":
@@ -66,6 +68,7 @@ export async function GET(request: NextRequest) {
         try {
           const res = await fetch(`${API_BASE}/chart/${trainNo}/${date}`, {
             headers: HEADERS,
+            cache: "no-store",
           });
           if (!res.ok) return { date, ready: false };
 

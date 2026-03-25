@@ -158,7 +158,7 @@ export async function searchTrains(
 ): Promise<{ number: string; name: string }[]> {
   try {
     const res = await fetch(`${API_BASE}/train/${encodeURIComponent(query)}`, {
-      headers: HEADERS,
+      headers: HEADERS, cache: "no-store",
     });
     if (!res.ok) return [];
 
@@ -195,7 +195,7 @@ export async function getTrainDetails(
 ): Promise<TrainDetailsResponse | null> {
   try {
     const res = await fetch(`${API_BASE}/train/${encodeURIComponent(trainNo)}`, {
-      headers: HEADERS,
+      headers: HEADERS, cache: "no-store",
     });
     if (!res.ok) return null;
     return await res.json();
@@ -222,7 +222,7 @@ export async function scrapeTrainchart(
     // Step 1: Fetch coach composition
     console.log(`[TrainChart] Fetching coach list for ${trainNo} on ${date}`);
     const compUrl = `${API_BASE}/chart/${trainNo}/${date}`;
-    const compRes = await fetch(compUrl, { headers: HEADERS });
+    const compRes = await fetch(compUrl, { headers: HEADERS, cache: "no-store" });
 
     if (!compRes.ok) {
       if (compRes.status === 404) {
@@ -287,7 +287,7 @@ export async function scrapeTrainchart(
           const vacancyUrl = `${API_BASE}/chart/${trainNo}/${date}/${coach.classCode}:${coach.id}`;
           console.log(`[TrainChart] Fetching vacancy: ${coach.classCode}:${coach.id}`);
 
-          const res = await fetch(vacancyUrl, { headers: HEADERS });
+          const res = await fetch(vacancyUrl, { headers: HEADERS, cache: "no-store" });
           if (!res.ok) return null;
 
           const data: CoachVacancyResponse = await res.json();
@@ -336,7 +336,7 @@ export async function scrapeTrainchart(
         try {
           await delay(300);
           const vacancyUrl = `${API_BASE}/chart/${trainNo}/${date}/${coach.classCode}:${coach.id}`;
-          const res = await fetch(vacancyUrl, { headers: HEADERS });
+          const res = await fetch(vacancyUrl, { headers: HEADERS, cache: "no-store" });
           if (!res.ok) continue;
 
           const data: CoachVacancyResponse = await res.json();
