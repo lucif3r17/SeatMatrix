@@ -228,7 +228,7 @@ function ResultsContent() {
               <div className="flex items-center gap-3 mt-1">
                 {fetchedAt && (
                   <p className="text-[10px] text-gray-500">
-                    Fetched: {new Date(fetchedAt).toLocaleTimeString()}
+                    Fetched: {fetchedAt.includes(",") ? fetchedAt.split(", ")[1] : fetchedAt}
                   </p>
                 )}
                 {chartPrepTime && (

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTrainDetails } from "@/lib/trainchartScraper";
+import { getISTDate } from "@/lib/dateUtils";
 
 export const dynamic = "force-dynamic";
 
@@ -47,16 +48,16 @@ export async function GET(request: NextRequest) {
     const details = await getTrainDetails(trainNo);
     const trainName = details?.name || trainNo;
 
-    // Check chart status for today + next 4 days (5 total)
-    const now = new Date(
-      new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
-    );
+    // Temporary debug logging
+    console.log({
+      utc: new Date().toISOString(),
+      ist: new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+    });
 
+    // Check chart status for today + next 4 days (5 total) using IST
     const datesToCheck: string[] = [];
     for (let offset = 0; offset < 5; offset++) {
-      const d = new Date(now);
-      d.setDate(d.getDate() + offset);
-      datesToCheck.push(d.toISOString().split("T")[0]);
+      datesToCheck.push(getISTDate(offset));
     }
 
     const availableDates: AvailableDate[] = [];
