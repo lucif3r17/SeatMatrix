@@ -489,6 +489,7 @@ function markOccupiedFuzzy(
 }
 
 // ─── Helpers ───
+// Helps to fail the function
 
 function fail(error: string, chartPrepTime?: string): TrainchartResult {
   return {
