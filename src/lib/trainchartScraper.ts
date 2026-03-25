@@ -237,8 +237,8 @@ export async function scrapeTrainchart(
       return fail("No coach composition data available.");
     }
 
-    // Check if chart is prepared
-    if (compData.c1 === 0) {
+    // Check if chart is prepared (c1 > 0 means prepared; absent or 0 means not)
+    if (!compData.c1 || compData.c1 <= 0) {
       return fail(
         `Chart not prepared yet. ${compData.cpts || "Charts are usually prepared 4-6 hours before departure."}`,
         compData.cpts

@@ -82,10 +82,13 @@ export default function SearchForm() {
   };
 
   // Fetch schedule (auto-date) for the selected train
+  const [availableDates, setAvailableDates] = useState<{ date: string; chartPrepTime?: string }[]>([]);
+
   const fetchSchedule = useCallback(async (trainNumber: string) => {
     setScheduleStatus("loading");
-    setScheduleMessage("Checking schedule & chart status...");
+    setScheduleMessage("Checking chart status for upcoming dates...");
     setDate("");
+    setAvailableDates([]);
 
     try {
       const res = await fetch(`/api/train-schedule?train_no=${trainNumber}`);
@@ -95,13 +98,15 @@ export default function SearchForm() {
         setDate(data.date);
         setScheduleStatus("ready");
         setScheduleMessage(data.message || `Chart ready for ${data.date}`);
+        if (data.availableDates) {
+          setAvailableDates(data.availableDates);
+        }
       } else if (data.status === "not_ready") {
-        setDate(data.date);
         setScheduleStatus("not_ready");
-        setScheduleMessage(data.message || `Chart not yet prepared for ${data.date}`);
-      } else if (data.status === "unavailable") {
-        setScheduleStatus("unavailable");
-        setScheduleMessage(data.message || "Train doesn't run in the next 7 days.");
+        setScheduleMessage(data.message || "Chart not prepared for any upcoming date.");
+      } else if (data.status === "error") {
+        setScheduleStatus("error");
+        setScheduleMessage(data.message || "Could not check schedule.");
       } else {
         setScheduleStatus("error");
         setScheduleMessage(data.message || "Could not determine schedule.");
@@ -152,7 +157,7 @@ export default function SearchForm() {
   const filteredTo = fromIdx >= 0 ? trainStations.filter((_, i) => i > fromIdx) : trainStations.slice(1);
 
   // Determine if the form is submittable
-  const canSubmit = trainNo && date && from && to && (scheduleStatus === "ready" || scheduleStatus === "not_ready" || dataMode === "mock");
+  const canSubmit = trainNo && date && from && to && (scheduleStatus === "ready" || dataMode === "mock");
 
   return (
     <motion.form
@@ -272,7 +277,7 @@ export default function SearchForm() {
             )}
           </div>
 
-          {/* Schedule / Date Status — replaces old date picker */}
+          {/* Schedule / Date Status */}
           <div className="space-y-2 md:col-span-2">
             <label className="text-sm font-medium text-gray-300 uppercase tracking-wider">
               Journey Date
@@ -286,7 +291,7 @@ export default function SearchForm() {
                   exit={{ opacity: 0 }}
                   className="bg-white/[0.03] border border-white/10 rounded-xl px-4 py-3 text-gray-500 text-sm"
                 >
-                  Select a train to auto-detect the journey date
+                  Select a train to check available chart dates
                 </motion.div>
               )}
 
@@ -299,7 +304,7 @@ export default function SearchForm() {
                   className="bg-white/[0.03] border border-white/10 rounded-xl px-4 py-3 flex items-center gap-3"
                 >
                   <div className="w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-                  <span className="text-cyan-400 text-sm">Checking schedule & chart status...</span>
+                  <span className="text-cyan-400 text-sm">Checking chart status for upcoming dates...</span>
                 </motion.div>
               )}
 
@@ -311,14 +316,44 @@ export default function SearchForm() {
                   exit={{ opacity: 0 }}
                   className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-3"
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                    <span className="text-emerald-400 font-semibold text-sm">
-                      📅 {date}
-                    </span>
-                    <span className="text-emerald-400/60 text-xs ml-auto">Chart Ready ✓</span>
-                  </div>
-                  <p className="text-emerald-400/70 text-xs mt-1">{scheduleMessage}</p>
+                  {/* Date selector buttons */}
+                  {availableDates.length > 1 ? (
+                    <div className="space-y-2">
+                      <p className="text-emerald-400/80 text-xs">
+                        {availableDates.length} dates with chart data available — select one:
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {availableDates.map((ad) => (
+                          <button
+                            key={ad.date}
+                            type="button"
+                            onClick={() => {
+                              setDate(ad.date);
+                              setScheduleMessage(
+                                `Chart prepared for ${ad.date}${ad.chartPrepTime ? ` (${ad.chartPrepTime})` : ""}`
+                              );
+                            }}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                              date === ad.date
+                                ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/25"
+                                : "bg-white/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20"
+                            }`}
+                          >
+                            📅 {ad.date}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      <span className="text-emerald-400 font-semibold text-sm">
+                        📅 {date}
+                      </span>
+                      <span className="text-emerald-400/60 text-xs ml-auto">Chart Ready ✓</span>
+                    </div>
+                  )}
+                  <p className="text-emerald-400/70 text-xs mt-2">{scheduleMessage}</p>
                 </motion.div>
               )}
 
@@ -332,9 +367,8 @@ export default function SearchForm() {
                 >
                   <div className="flex items-center gap-2">
                     <span className="text-amber-400 font-semibold text-sm">
-                      📅 {date}
+                      ⏳ No chart data available yet
                     </span>
-                    <span className="text-amber-400/60 text-xs ml-auto">Chart Not Prepared</span>
                   </div>
                   <p className="text-amber-400/70 text-xs mt-1">{scheduleMessage}</p>
                   {dataMode === "mock" && (
@@ -343,9 +377,9 @@ export default function SearchForm() {
                 </motion.div>
               )}
 
-              {(scheduleStatus === "unavailable" || scheduleStatus === "error") && (
+              {scheduleStatus === "error" && (
                 <motion.div
-                  key="unavailable"
+                  key="error"
                   initial={{ opacity: 0, y: -5 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0 }}
@@ -353,7 +387,7 @@ export default function SearchForm() {
                 >
                   <div className="flex items-center gap-2">
                     <span className="text-red-400 font-semibold text-sm">
-                      ❌ {scheduleStatus === "unavailable" ? "Train doesn't run now" : "Schedule check failed"}
+                      ❌ Schedule check failed
                     </span>
                   </div>
                   <p className="text-red-400/70 text-xs mt-1">{scheduleMessage}</p>
