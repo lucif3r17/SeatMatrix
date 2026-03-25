@@ -43,9 +43,10 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // Get train name
+    // Get train name and stations
     const details = await getTrainDetails(trainNo);
     const trainName = details?.name || trainNo;
+    const stations = details?.stns || [];
 
     // Temporary debug logging
     console.log({
@@ -79,10 +80,41 @@ export async function GET(request: NextRequest) {
           if (!res.ok) return { date, ready: false };
 
           const data: ChartCheckResponse = await res.json();
+          let isReady = !!(data.c1 && data.c1 > 0);
+          let chartPrepTime = data.cpts || data.cpt;
+
+          // If TrainApp says it's not ready but we have stations, check IRCTC fallback
+          if (!isReady && stations.length > 0) {
+            try {
+              const irctcRes = await fetch(`https://www.irctc.co.in/online-charts/api/trainComposition`, {
+                method: "POST",
+                headers: {
+                  ...HEADERS,
+                  "Content-Type": "application/json",
+                  Accept: "application/json, text/plain, */*",
+                },
+                body: JSON.stringify({ trainNo, jDate: date, boardingStation: stations[0].code }),
+                cache: "no-store",
+              });
+              
+              if (irctcRes.ok) {
+                const irctcData = await irctcRes.json();
+                if (irctcData.chartStatusResponseDto?.chartOneFlag > 0) {
+                  isReady = true;
+                  if (irctcData.chartOneDate) {
+                    chartPrepTime = (irctcData.chartOneDate.slice(0, 10) === irctcData.trainStartDate ? "same day at " : "prev day at ") + irctcData.chartOneDate.slice(10);
+                  }
+                }
+              }
+            } catch {
+              // Ignore IRCTC fallback errors for schedule check
+            }
+          }
+
           return {
             date,
-            ready: !!(data.c1 && data.c1 > 0) || !!data.cpts,
-            chartPrepTime: data.cpts || data.cpt,
+            ready: isReady,
+            chartPrepTime: chartPrepTime,
           };
         } catch {
           return { date, ready: false };
